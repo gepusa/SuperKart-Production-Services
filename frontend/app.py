@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -57,13 +56,9 @@ uploaded_file = st.file_uploader("Upload a raw CSV file (supports 10-column or r
 
 if uploaded_file is not None:
     if st.button("Predict for Batch", type='primary'):
-        # Let's read it to verify formatting locally if needed
         df_raw = pd.read_csv(uploaded_file)
-        
-        # Reset buffer
         uploaded_file.seek(0)
-        
-        # Send the file directly to our backend endpoint
+
         response = requests.post(
             f"{BACKEND_URL}/v1/predictbatch",
             files={"file": uploaded_file}
@@ -72,11 +67,8 @@ if uploaded_file is not None:
         if response.status_code == 200:
             results = response.json()
             st.success("Predictions completed successfully!")
-            
-            # Map predictions back to the original rows
             pred_series = pd.Series(results).astype(float)
             df_raw['Predicted_Sales'] = pred_series.values
-            
             st.dataframe(df_raw, use_container_width=True)
         else:
             st.error(f"Unable to complete prediction batch: {response.text}")
