@@ -1,68 +1,81 @@
 
-# Import necessary libraries
 import numpy as np
-import joblib  # For loading the serialized model
-import pandas as pd  # For data manipulation
-from flask import Flask, request, jsonify  # For creating the Flask API
+import joblib
+import pandas as pd
+from flask import Flask, request, jsonify
 
-# Initialize Flask app with a name
 superkart_api = Flask("SuperKart")
 
-# Load the trained model
+# Load the trained pipeline
 model = joblib.load("superkart_model.joblib")
 
-# Define a route for the home page
+def preprocess_raw_dataframe(df_raw):
+    """Replicates training preprocessing for raw input DataFrames"""
+    df = df_raw.copy()
+
+    # 1. Harmonize product sugar categories
+    if 'Product_Sugar_Content' in df.columns:
+        df['Product_Sugar_Content'] = df['Product_Sugar_Content'].replace('reg', 'Regular')
+
+    # 2. Extract Product_Id characters
+    if 'Product_Id' in df.columns:
+        df['Product_Id_char'] = df['Product_Id'].str[:2]
+
+        # 3. Create Product_Category mapped variable
+        category_map = {'FD': 'Food', 'DR': 'Drink', 'NC': 'Non-Consumable'}
+        df['Product_Category'] = df['Product_Id_char'].map(category_map)
+
+    # 4. Calculate Store Age (Years)
+    if 'Store_Establishment_Year' in df.columns:
+        df['Store_Age_Years'] = 2025 - df['Store_Establishment_Year']
+
+    # Drop unnecessary columns
+    drop_cols = ['Product_Type', 'Product_Id', 'Store_Establishment_Year', 'Product_Store_Sales_Total']
+    df = df.drop(columns=drop_cols, errors='ignore')
+
+    # Explicitly enforce correct training features structure and ordering
+    expected_columns = [
+        'Product_Weight', 'Product_Sugar_Content', 'Product_Allocated_Area',
+        'Product_MRP', 'Store_Id', 'Store_Size', 'Store_Location_City_Type',
+        'Store_Type', 'Product_Id_char', 'Product_Category', 'Store_Age_Years'
+    ]
+    return df[expected_columns]
+
 @superkart_api.get('/')
 def home():
-    return "Welcome to the SuperKart System"
+    return "Welcome to the SuperKart System - Automated Preprocessing API"
 
-# Define an endpoint to predict sales for a single product
 @superkart_api.post('/v1/predict')
 def predict_sales():
-    # Get JSON data from the request
+    # Accept a single raw record JSON request
     data = request.get_json()
 
-    # Extract relevant features from the input data
-    sample = {
-    'Product_Weight': data['Product_Weight'],
-    'Product_Sugar_Content': data['Product_Sugar_Content'],
-    'Product_Allocated_Area': data['Product_Allocated_Area'],
-    'Product_MRP': data['Product_MRP'],
-    'Store_Size': data['Store_Size'],
-    'Store_Location_City_Type': data['Store_Location_City_Type'],
-    'Store_Type': data['Store_Type'],
-    'Product_Id_char': data['Product_Id_char'],
-    'Store_Age_Years': data['Store_Age_Years'],
-    'Product_Type_Category': data['Product_Type_Category']
-}
+    # Transform raw JSON into DataFrame
+    raw_df = pd.DataFrame([data])
 
-    # Convert the extracted data into a DataFrame
-    input_data = pd.DataFrame([sample])
+    try:
+        # Clean the input records on-the-fly
+        processed_df = preprocess_raw_dataframe(raw_df)
+        prediction = model.predict(processed_df).tolist()[0]
+        return jsonify({'Sales': round(prediction, 2)})
+    except Exception as e:
+        return jsonify({'error': f"Preprocessing/Prediction failed: {str(e)}"}), 400
 
-    # Make a prediction using the trained model
-    prediction = model.predict(input_data).tolist()[0]
-
-    # Return the prediction as a JSON response
-    return jsonify({'Sales': prediction})
-
-# Define an endpoint to predict sales for a batch of products
 @superkart_api.post('/v1/predictbatch')
 def predict_sales_batch():
-    # Get the uploaded CSV file from the request
+    # Accept an uploaded raw CSV file containing arbitrary rows
     file = request.files['file']
+    raw_df = pd.read_csv(file)
 
-    # Read the file into a DataFrame
-    input_data = pd.read_csv(file)
+    try:
+        # Automatically clean the raw file batch dynamically
+        processed_df = preprocess_raw_dataframe(raw_df)
+        predictions = model.predict(processed_df).tolist()
 
-    # Make predictions for the batch data
-    predictions = model.predict(input_data).tolist()
+        output_dict = {str(i): round(pred, 2) for i, pred in enumerate(predictions)}
+        return jsonify(output_dict)
+    except Exception as e:
+        return jsonify({'error': f"Batch preprocessing/prediction failed: {str(e)}"}), 400
 
-    # Create an output dictionary mapping row index to predicted sales
-    output_dict = {str(i): round(pred, 2) for i, pred in enumerate(predictions)}
-
-    return output_dict
-
-
-# Run the Flask app in debug mode
 if __name__ == '__main__':
     superkart_api.run(debug=True)
